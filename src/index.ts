@@ -14,12 +14,8 @@ const MAX_ERROR_BODY_PREVIEW = 2_048;
 
 const rateLimitStore = new Map<string, number[]>();
 
-export interface Env {
-  TWILOG_TOKEN: string;
-}
-
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     const start = Date.now();
     const requestId = generateRequestId();
     const url = new URL(request.url);
@@ -34,7 +30,7 @@ export default {
           break;
         case "GET":
         case "HEAD":
-          response = await handleRequest(method, request, env, requestId, url);
+          response = await handleRequest(method, request, requestId, url);
           break;
         default:
           response = jsonResponse(
@@ -88,13 +84,10 @@ export default {
 async function handleRequest(
   method: string,
   request: Request,
-  env: Env,
   requestId: string,
   url: URL,
 ): Promise<Response> {
-  const isHealth = url.pathname === "/health";
-
-  if (isHealth) {
+  if (url.pathname === "/health") {
     const healthResponse = jsonResponse(
       {
         ok: true,
@@ -122,11 +115,19 @@ async function handleRequest(
     );
   }
 
+  const token = getToken();
+  if (!token) {
+    return jsonResponse(
+      { error: "bad_gateway", detail: "上流認証情報が設定されていません。" },
+      { status: 502, requestId, cacheControl: "no-store" },
+    );
+  }
+
   switch (url.pathname) {
     case "/tools":
-      return await handleTools(request, env, requestId, url);
+      return await handleTools(request, token, requestId, url);
     case "/search":
-      return await handleSearch(request, env, requestId, url);
+      return await handleSearch(request, token, requestId, url);
     case "/":
       return jsonResponse(
         { ok: true, service: "twilog-bridge" },
@@ -142,17 +143,10 @@ async function handleRequest(
 
 async function handleTools(
   request: Request,
-  env: Env,
+  token: string,
   requestId: string,
   url: URL,
 ): Promise<Response> {
-  if (!env.TWILOG_TOKEN) {
-    return jsonResponse(
-      { error: "bad_gateway", detail: "上流認証情報が設定されていません。" },
-      { status: 502, requestId, cacheControl: "no-store" },
-    );
-  }
-
   const payload = {
     jsonrpc: "2.0",
     id: generateRequestId(),
@@ -160,7 +154,7 @@ async function handleTools(
     params: {},
   };
 
-  const result = await fetchMcp(payload, env);
+  const result = await fetchMcp(payload, token);
   if (result.kind === "timeout") {
     return jsonResponse(
       { error: "upstream_timeout" },
@@ -216,17 +210,10 @@ async function handleTools(
 
 async function handleSearch(
   request: Request,
-  env: Env,
+  token: string,
   requestId: string,
   url: URL,
 ): Promise<Response> {
-  if (!env.TWILOG_TOKEN) {
-    return jsonResponse(
-      { error: "bad_gateway", detail: "上流認証情報が設定されていません。" },
-      { status: 502, requestId, cacheControl: "no-store" },
-    );
-  }
-
   const query = url.searchParams.get("q");
   if (!query || query.length < QUERY_MIN_LENGTH || query.length > QUERY_MAX_LENGTH) {
     return jsonResponse(
@@ -254,7 +241,7 @@ async function handleSearch(
     },
   };
 
-  const result = await fetchMcp(payload, env);
+  const result = await fetchMcp(payload, token);
   if (result.kind === "timeout") {
     return jsonResponse(
       { error: "upstream_timeout" },
@@ -313,7 +300,7 @@ type FetchMcpResult =
   | { kind: "http_error"; status: number; text: string }
   | { kind: "timeout" };
 
-async function fetchMcp(payload: unknown, env: Env): Promise<FetchMcpResult> {
+async function fetchMcp(payload: unknown, token: string): Promise<FetchMcpResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MCP_TIMEOUT_MS);
 
@@ -323,7 +310,7 @@ async function fetchMcp(payload: unknown, env: Env): Promise<FetchMcpResult> {
       headers: {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
-        authorization: `Bearer ${env.TWILOG_TOKEN}`,
+        authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(payload),
       signal: controller.signal,
@@ -518,8 +505,8 @@ function applyRateLimit(ip: string): { allowed: true } | { allowed: false; retry
 
 function getClientIp(request: Request): string {
   const headerIp =
-    request.headers.get("cf-connecting-ip") ??
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    request.headers.get("x-real-ip")?.trim();
   return headerIp || "unknown";
 }
 
@@ -533,4 +520,12 @@ function optionsResponse(requestId: string): Response {
 function toHeadResponse(response: Response): Response {
   const headers = new Headers(response.headers);
   return new Response(null, { status: response.status, headers });
+}
+
+function getToken(): string | null {
+  try {
+    return Deno.env.get("TWILOG_TOKEN") ?? null;
+  } catch {
+    return null;
+  }
 }

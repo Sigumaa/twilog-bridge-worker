@@ -1,6 +1,0 @@
-name = "twilog-bridge"
-main = "src/index.ts"
-compatibility_date = "2025-10-07"
-
-[vars]
-TWILOG_TOKEN = "<REPLACE_AT_DEPLOY>"

@@ -1,16 +1,10 @@
 # Node / npm
-node_modules/
-npm-debug.log*
-package-lock.json.*
-
-# Build artifacts
-dist/
-.wrangler/
-
 # Environment / secrets
 .env
 .env.*
 .dev.vars
+.envrc
+.deno/
 
 # Misc
 .DS_Store
