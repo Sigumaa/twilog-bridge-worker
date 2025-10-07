@@ -28,57 +28,25 @@ export default {
     let response: Response | undefined;
 
     try {
-      if (method !== "GET") {
-        response = jsonResponse(
-          { error: "method_not_allowed", detail: "GET のみ利用できます。" },
-          {
-            status: 405,
-            requestId,
-            cacheControl: "no-store",
-            extraHeaders: { Allow: "GET" },
-          },
-        );
-      } else {
-        const rateResult = applyRateLimit(getClientIp(request));
-        if (!rateResult.allowed) {
+      switch (method) {
+        case "OPTIONS":
+          response = optionsResponse(requestId);
+          break;
+        case "GET":
+        case "HEAD":
+          response = await handleRequest(method, request, env, requestId, url);
+          break;
+        default:
           response = jsonResponse(
+            { error: "method_not_allowed", detail: "GET/HEAD/OPTIONS のみ利用できます。" },
             {
-              error: "too_many_requests",
-              detail: "一定時間あたりのリクエスト数を超過しました。",
-            },
-            {
-              status: 429,
+              status: 405,
               requestId,
               cacheControl: "no-store",
-              extraHeaders: { "Retry-After": String(rateResult.retryAfterSeconds) },
+              extraHeaders: { Allow: "GET, HEAD, OPTIONS" },
             },
           );
-        } else {
-          switch (url.pathname) {
-            case "/tools":
-              response = await handleTools(request, env, requestId, url);
-              break;
-            case "/search":
-              response = await handleSearch(request, env, requestId, url);
-              break;
-            case "/health":
-              response = jsonResponse(
-                {
-                  ok: true,
-                  service: "twilog-bridge",
-                  time: new Date().toISOString(),
-                },
-                { status: 200, requestId, cacheControl: "no-store" },
-              );
-              break;
-            default:
-              response = jsonResponse(
-                { error: "not_found", detail: "指定されたパスは存在しません。" },
-                { status: 404, requestId, cacheControl: "no-store" },
-              );
-              break;
-          }
-        }
+          break;
       }
     } catch (error) {
       console.error("handler_error", {
@@ -109,9 +77,68 @@ export default {
       );
     }
 
+    if (method === "HEAD" && response.status !== 304) {
+      return toHeadResponse(response);
+    }
+
     return response;
   },
 };
+
+async function handleRequest(
+  method: string,
+  request: Request,
+  env: Env,
+  requestId: string,
+  url: URL,
+): Promise<Response> {
+  const isHealth = url.pathname === "/health";
+
+  if (isHealth) {
+    const healthResponse = jsonResponse(
+      {
+        ok: true,
+        service: "twilog-bridge",
+        time: new Date().toISOString(),
+      },
+      { status: 200, requestId, cacheControl: "no-store" },
+    );
+    return method === "HEAD" ? toHeadResponse(healthResponse) : healthResponse;
+  }
+
+  const rateResult = applyRateLimit(getClientIp(request));
+  if (!rateResult.allowed) {
+    return jsonResponse(
+      {
+        error: "too_many_requests",
+        detail: "一定時間あたりのリクエスト数を超過しました。",
+      },
+      {
+        status: 429,
+        requestId,
+        cacheControl: "no-store",
+        extraHeaders: { "Retry-After": String(rateResult.retryAfterSeconds) },
+      },
+    );
+  }
+
+  switch (url.pathname) {
+    case "/tools":
+      return await handleTools(request, env, requestId, url);
+    case "/search":
+      return await handleSearch(request, env, requestId, url);
+    case "/":
+      return jsonResponse(
+        { ok: true, service: "twilog-bridge" },
+        { status: 200, requestId, cacheControl: "no-store" },
+      );
+    default:
+      return jsonResponse(
+        { error: "not_found", detail: "指定されたパスは存在しません。" },
+        { status: 404, requestId, cacheControl: "no-store" },
+      );
+  }
+}
 
 async function handleTools(
   request: Request,
@@ -184,7 +211,6 @@ async function handleTools(
     requestId,
     cacheControl,
     extraHeaders: { ETag: etag },
-    includeRequestId: false,
   });
 }
 
@@ -279,7 +305,6 @@ async function handleSearch(
     requestId,
     cacheControl,
     extraHeaders: { ETag: etag },
-    includeRequestId: false,
   });
 }
 
@@ -297,6 +322,7 @@ async function fetchMcp(payload: unknown, env: Env): Promise<FetchMcpResult> {
       method: "POST",
       headers: {
         "content-type": "application/json",
+        accept: "application/json, text/event-stream",
         authorization: `Bearer ${env.TWILOG_TOKEN}`,
       },
       body: JSON.stringify(payload),
@@ -398,6 +424,9 @@ function notModifiedResponse(
 function buildBaseHeaders(requestId: string): Headers {
   const headers = new Headers();
   headers.set("access-control-allow-origin", "*");
+  headers.set("access-control-allow-methods", "GET, HEAD, OPTIONS");
+  headers.set("access-control-allow-headers", "*");
+  headers.set("vary", "Accept");
   headers.set("x-request-id", requestId);
   headers.set("x-content-type-options", "nosniff");
   return headers;
@@ -492,4 +521,16 @@ function getClientIp(request: Request): string {
     request.headers.get("cf-connecting-ip") ??
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   return headerIp || "unknown";
+}
+
+function optionsResponse(requestId: string): Response {
+  return jsonResponse(
+    { ok: true },
+    { status: 200, requestId, cacheControl: "no-store" },
+  );
+}
+
+function toHeadResponse(response: Response): Response {
+  const headers = new Headers(response.headers);
+  return new Response(null, { status: response.status, headers });
 }
