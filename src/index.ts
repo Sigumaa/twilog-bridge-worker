@@ -322,6 +322,7 @@ async function fetchMcp(payload: unknown, env: Env): Promise<FetchMcpResult> {
       method: "POST",
       headers: {
         "content-type": "application/json",
+        accept: "application/json, text/event-stream",
         authorization: `Bearer ${env.TWILOG_TOKEN}`,
       },
       body: JSON.stringify(payload),
