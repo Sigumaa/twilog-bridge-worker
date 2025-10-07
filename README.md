@@ -1,3 +1,5 @@
+# ChatGPTでMCP使えないから間に挟んでバイパスして疑似的に使えるようにしたかったけどcf workersもdeno deployもchatgptのアクセスをブロックしてるっぽくて絶望しています
+
 # twilog-bridge (Deno Deploy)
 
 Twilog MCP の `tools/list` / `tools/call(get_twitter_posts)` を GET のみで呼び出せる HTTP ブリッジ。  
